@@ -1,25 +1,24 @@
-import { kind, Lang, parse, type SgNode } from "@ast-grep/napi";
+import { kind, parse, type SgNode } from "@ast-grep/napi";
 import { attach } from "neovim";
+import { getAstGrepLang, type SupportedLanguage } from "./utils.ts";
 
 type Cursor = {
   line: number;
   column: number;
 };
 
-type SupportedLanguage =
-  | "javascript"
-  | "typescript"
-  | "typescriptreact"
-  | "javascriptreact";
-
-type HandlerResult = {
+type ModResult = {
   found: boolean;
-  transformation?: string;
+  mod?: string;
   target_range?: {
     start: { line: number; column: number };
     end: { line: number; column: number };
   };
   cursor?: Cursor;
+};
+
+type ListModsResult = {
+  mods: string[];
 };
 
 function findClosestNodeAtCursor(matches: SgNode[], cursor: Cursor) {
@@ -55,7 +54,7 @@ function handleFindClosestFunction(
   source: string,
   language: SupportedLanguage,
   cursor: Cursor,
-): HandlerResult {
+): ModResult {
   const ast = parse(getAstGrepLang(language), source);
   const root = ast.root();
   const lang = getAstGrepLang(language);
@@ -68,7 +67,7 @@ function handleFindClosestFunction(
     const range = closestFunction.range();
     return {
       found: true,
-      transformation: closestFunction.text(),
+      mod: closestFunction.text(),
       target_range: {
         start: { line: range.start.line, column: range.start.column },
         end: { line: range.end.line, column: range.end.column },
@@ -83,35 +82,63 @@ function handleFindClosestFunction(
   }
 }
 
-function getHandler(
-  method: string,
-):
-  | ((
-      source: string,
-      language: SupportedLanguage,
-      cursor: Cursor,
-    ) => HandlerResult)
-  | null {
-  switch (method) {
-    case "find_closest_function":
-      return handleFindClosestFunction;
-    default:
-      return null;
+function handleFindClosestJsxAttr(
+  source: string,
+  language: SupportedLanguage,
+  cursor: Cursor,
+): ModResult {
+  const ast = parse(getAstGrepLang(language), source);
+  const root = ast.root();
+  const lang = getAstGrepLang(language);
+
+  const jsxAttributes = root.findAll(kind(lang, "jsx_attribute"));
+
+  const closestAttr = findClosestNodeAtCursor(jsxAttributes, cursor);
+
+  if (closestAttr) {
+    const range = closestAttr.range();
+    return {
+      found: true,
+      mod: closestAttr.text(),
+      target_range: {
+        start: { line: range.start.line, column: range.start.column },
+        end: { line: range.end.line, column: range.end.column },
+      },
+      cursor: cursor,
+    };
+  } else {
+    return {
+      found: false,
+      cursor: cursor,
+    };
   }
 }
 
-function getAstGrepLang(language: SupportedLanguage): Lang {
-  switch (language) {
-    case "javascript":
-    case "javascriptreact":
-      return Lang.JavaScript;
-    case "typescript":
-      return Lang.TypeScript;
-    case "typescriptreact":
-      return Lang.Tsx;
-    default:
-      return Lang.JavaScript;
-  }
+const modMap = {
+  find_closest_function: handleFindClosestFunction,
+  find_closest_jsx_attr: handleFindClosestJsxAttr,
+} as const;
+
+function handleListMods(): ListModsResult {
+  return {
+    mods: Object.keys(modMap),
+  };
+}
+
+type ModHandler = (
+  source: string,
+  language: SupportedLanguage,
+  cursor: Cursor,
+) => ModResult;
+
+type ListModsHandler = () => ListModsResult;
+
+function getModHandler(method: string): ModHandler | null {
+  return modMap[method as keyof typeof modMap] || null;
+}
+
+function getListModsHandler(method: string): ListModsHandler | null {
+  return method === "get_mods" ? handleListMods : null;
 }
 
 async function main() {
@@ -134,10 +161,23 @@ async function main() {
     const language = bufferFiletype as SupportedLanguage;
 
     try {
-      const handler = getHandler(method);
-      if (handler) {
-        const result = handler(source, language, cursor);
-        await nvim.lua("require('mod-flow').handle_response(...)", [requestId, result]);
+      const listModsHandler = getListModsHandler(method);
+      if (listModsHandler) {
+        const result = listModsHandler();
+        await nvim.lua("require('mod-flow').handle_response(...)", [
+          requestId,
+          result,
+        ]);
+        return;
+      }
+
+      const modHandler = getModHandler(method);
+      if (modHandler) {
+        const result = modHandler(source, language, cursor);
+        await nvim.lua("require('mod-flow').handle_response(...)", [
+          requestId,
+          result,
+        ]);
       }
     } catch (error) {
       nvim.logger.error(`Error: ${error}`);

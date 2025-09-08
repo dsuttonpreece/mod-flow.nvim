@@ -46,17 +46,31 @@ function M.setup()
     end,
   })
 
-  vim.keymap.set("n", "<leader>k", function()
-    if server_job_id then
-      async_request("find_closest_function", {}, function(result)
-        if result.found then
-          print("Function found: " .. vim.inspect(result))
-        else
-          print("No function found at cursor")
+  local function handle_method_result(result, method_name)
+    if method_name == "get_mods" then
+      vim.ui.select(result.mods, {
+        prompt = "Select method:",
+      }, function(selected)
+        if selected then
+          async_request(selected, {}, function(method_result)
+            handle_method_result(method_result, selected)
+          end)
         end
       end)
+    elseif result.found then
+      print(method_name .. " found: " .. vim.inspect(result))
+    else
+      print("No " .. method_name:gsub("find_closest_", ""):gsub("_", " ") .. " found at cursor")
     end
-  end, { desc = "ModFlow: Find Closest Function" })
+  end
+
+  vim.keymap.set("n", "<leader>k", function()
+    if server_job_id then
+      async_request("get_mods", {}, function(result)
+        handle_method_result(result, "get_mods")
+      end)
+    end
+  end, { desc = "ModFlow: Select Method" })
 end
 
 return M
