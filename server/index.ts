@@ -10,11 +10,13 @@ type Cursor = {
 type ModResult = {
   found: boolean;
   mod?: string;
-  target_range?: {
+  original_range?: {
     start: { line: number; column: number };
     end: { line: number; column: number };
   };
   cursor?: Cursor;
+  original_source?: string;
+  source?: string;
 };
 
 type ListModsResult = {
@@ -50,7 +52,7 @@ function findClosestNodeAtCursor(matches: SgNode[], cursor: Cursor) {
   return closestNode;
 }
 
-function handleFindClosestFunction(
+function handleDeleteFunction(
   source: string,
   language: SupportedLanguage,
   cursor: Cursor,
@@ -65,46 +67,17 @@ function handleFindClosestFunction(
 
   if (closestFunction) {
     const range = closestFunction.range();
+
     return {
       found: true,
-      mod: closestFunction.text(),
-      target_range: {
+      mod: "", // Delete means empty replacement
+      original_range: {
         start: { line: range.start.line, column: range.start.column },
         end: { line: range.end.line, column: range.end.column },
       },
       cursor: cursor,
-    };
-  } else {
-    return {
-      found: false,
-      cursor: cursor,
-    };
-  }
-}
-
-function handleFindClosestJsxAttr(
-  source: string,
-  language: SupportedLanguage,
-  cursor: Cursor,
-): ModResult {
-  const ast = parse(getAstGrepLang(language), source);
-  const root = ast.root();
-  const lang = getAstGrepLang(language);
-
-  const jsxAttributes = root.findAll(kind(lang, "jsx_attribute"));
-
-  const closestAttr = findClosestNodeAtCursor(jsxAttributes, cursor);
-
-  if (closestAttr) {
-    const range = closestAttr.range();
-    return {
-      found: true,
-      mod: closestAttr.text(),
-      target_range: {
-        start: { line: range.start.line, column: range.start.column },
-        end: { line: range.end.line, column: range.end.column },
-      },
-      cursor: cursor,
+      original_source: source,
+      source: source.replace(closestFunction.text(), ""),
     };
   } else {
     return {
@@ -115,8 +88,7 @@ function handleFindClosestJsxAttr(
 }
 
 const modMap = {
-  find_closest_function: handleFindClosestFunction,
-  find_closest_jsx_attr: handleFindClosestJsxAttr,
+  delete_function: handleDeleteFunction,
 } as const;
 
 function handleListMods(): ListModsResult {
@@ -138,7 +110,7 @@ function getModHandler(method: string): ModHandler | null {
 }
 
 function getListModsHandler(method: string): ListModsHandler | null {
-  return method === "get_mods" ? handleListMods : null;
+  return method === "list_mods" ? handleListMods : null;
 }
 
 async function main() {

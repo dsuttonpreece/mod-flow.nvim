@@ -47,7 +47,7 @@ function M.setup()
   })
 
   local function handle_method_result(result, method_name)
-    if method_name == "get_mods" then
+    if method_name == "list_mods" then
       vim.ui.select(result.mods, {
         prompt = "Select method:",
       }, function(selected)
@@ -57,17 +57,28 @@ function M.setup()
           end)
         end
       end)
-    elseif result.found then
-      print(method_name .. " found: " .. vim.inspect(result))
-    else
+    elseif result.found and result.original_range then
+      -- Apply buffer changes using native Neovim API
+      local bufnr = vim.api.nvim_get_current_buf()
+      local replacement_lines = vim.split(result.mod or "", "\n")
+
+      vim.api.nvim_buf_set_text(
+        bufnr,
+        result.original_range.start.line,
+        result.original_range.start.column,
+        result.original_range["end"].line,
+        result.original_range["end"].column,
+        replacement_lines
+      )
+    elseif not result.found then
       print("No " .. method_name:gsub("find_closest_", ""):gsub("_", " ") .. " found at cursor")
     end
   end
 
   vim.keymap.set("n", "<leader>k", function()
     if server_job_id then
-      async_request("get_mods", {}, function(result)
-        handle_method_result(result, "get_mods")
+      async_request("list_mods", {}, function(result)
+        handle_method_result(result, "list_mods")
       end)
     end
   end, { desc = "ModFlow: Select Method" })
