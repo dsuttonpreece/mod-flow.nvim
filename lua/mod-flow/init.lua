@@ -77,7 +77,24 @@ function M.setup()
 
   vim.keymap.set("n", "<leader>k", function()
     if server_job_id then
-      async_request("list_mods", {}, function(result)
+      -- Get tree-sitter node under cursor
+      local node = vim.treesitter.get_node()
+      local node_info = nil
+
+      if node then
+        local start_row, start_col, end_row, end_col = node:range()
+        local node_text = vim.treesitter.get_node_text(node, 0)
+        node_info = {
+          range = {
+            start = { line = start_row, column = start_col },
+            ["end"] = { line = end_row, column = end_col }
+          },
+          text = node_text,
+          type = node:type()
+        }
+      end
+
+      async_request("list_mods", { node_info = node_info }, function(result)
         handle_method_result(result, "list_mods")
       end)
     end
