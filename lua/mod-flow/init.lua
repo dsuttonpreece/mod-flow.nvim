@@ -147,6 +147,11 @@ function M.setup()
       local bufnr = vim.api.nvim_get_current_buf()
       local replacement_lines = vim.split(result.mod or "", "\n")
 
+      -- Copy to clipboard if specified
+      if result.clipboard then
+        vim.fn.setreg('"', result.clipboard)
+      end
+
       vim.api.nvim_buf_set_text(
         bufnr,
         result.original_range.start.line,
@@ -183,7 +188,8 @@ function M.setup()
             ["end"] = { line = end_row, column = end_col }
           },
           text = node_text,
-          type = node:type()
+          type = node:type(),
+          cursor = { line = cursor_pos[1] - 1, column = cursor_pos[2] } -- Convert to 0-indexed
         }
       end
 

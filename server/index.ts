@@ -14,6 +14,7 @@ type NodeInfo = {
   };
   text: string;
   type: string;
+  cursor?: { line: number; column: number };
 };
 
 class ModFlowError extends Error {
@@ -47,6 +48,7 @@ type ModSuccessResult = {
   };
   cursor?: Cursor;
   source?: string;
+  clipboard?: string;
 };
 
 type ModError = {
@@ -60,75 +62,42 @@ type ListModsResult = {
   mods: string[];
 };
 
-function printNodeTree(node: SgNode, depth: number = 0, maxDepth: number = 3, targetNode?: SgNode, fieldName?: string): string {
+function printNodeTree(
+  node: SgNode,
+  depth: number = 0,
+  maxDepth: number = 3,
+  targetNode?: SgNode,
+): string {
   if (depth > maxDepth) {
     return "";
   }
 
   const indent = "  ".repeat(depth);
-  const isTarget = targetNode &&
+  const isTarget =
+    targetNode &&
     node.range().start.line === targetNode.range().start.line &&
     node.range().start.column === targetNode.range().start.column &&
     node.range().end.line === targetNode.range().end.line &&
     node.range().end.column === targetNode.range().end.column;
 
   const nodeKind = isTarget ? `<<<${node.kind()}>>>` : node.kind();
-  const fieldPrefix = fieldName ? `${fieldName}: ` : "";
-  let result = `${indent}${fieldPrefix}${nodeKind}`;
+  let result = `${indent}${nodeKind}\n`;
 
-  // Check if this node is punctuation or comma-like that should join on same line
-  if (node.kind() === "," || node.kind() === ";" || node.kind() === "{" || node.kind() === "}" || node.kind() === "(" || node.kind() === ")") {
-    // For punctuation, don't add newline until after we process children
-  } else {
-    result += "\n";
-  }
-
-  // Simple field name detection based on common patterns
   const children = node.children();
   for (const child of children) {
     if (depth < maxDepth) {
-      let childFieldName: string | undefined;
-      const childKind = child.kind();
-
-      // Basic field mappings for common cases
-      if (node.kind() === "class_declaration" && childKind === "type_identifier") {
-        childFieldName = "name";
-      } else if (node.kind() === "class_declaration" && childKind === "class_body") {
-        childFieldName = "body";
-      } else if (node.kind() === "extends_clause" && (childKind === "identifier" || childKind === "type_identifier")) {
-        childFieldName = "value";
-      } else if ((node.kind() === "method_definition" || node.kind() === "function_declaration") && (childKind === "property_identifier" || childKind === "identifier")) {
-        childFieldName = "name";
-      } else if ((node.kind() === "method_definition" || node.kind() === "function_declaration") && childKind === "formal_parameters") {
-        childFieldName = "parameters";
-      } else if ((node.kind() === "method_definition" || node.kind() === "function_declaration") && childKind === "statement_block") {
-        childFieldName = "body";
-      }
-
-      const childResult = printNodeTree(child, depth + 1, maxDepth, targetNode, childFieldName);
-
-      // If current node is punctuation and child is not empty, append on same line
-      if ((node.kind() === "," || node.kind() === ";" || node.kind() === "{" || node.kind() === "}" || node.kind() === "(" || node.kind() === ")") && childResult.trim()) {
-        result += " " + childResult.trim();
-      } else {
-        result += childResult;
-      }
+      result += printNodeTree(child, depth + 1, maxDepth, targetNode);
     }
-  }
-
-  // Add final newline for punctuation nodes
-  if (node.kind() === "," || node.kind() === ";" || node.kind() === "{" || node.kind() === "}" || node.kind() === "(" || node.kind() === ")") {
-    result += "\n";
   }
 
   return result;
 }
 
-async function handleDebugNodeUnderCursor(
+async function findNodeUnderCursor(
   source: string,
   language: SupportedLanguage,
   nodeInfo: NodeInfo | null,
-): Promise<ModResult> {
+): Promise<SgNode> {
   if (!nodeInfo) {
     throw new NoMatchError("tree-sitter node");
   }
@@ -153,15 +122,32 @@ async function handleDebugNodeUnderCursor(
     },
   });
 
+  if (matchingNodes.length === 0) {
+    throw new NoMatchError("AST-grep node");
+  }
+
   // Should find exactly one node with this exact range
   const targetNode = matchingNodes[0];
+  return targetNode;
+}
+
+async function handleDebugNodeUnderCursor(
+  source: string,
+  language: SupportedLanguage,
+  nodeInfo: NodeInfo | null,
+): Promise<ModResult> {
+  const targetNode = await findNodeUnderCursor(source, language, nodeInfo);
 
   if (targetNode) {
     // Walk up 3 parent levels to find the root for our tree
     let contextRoot = targetNode;
     for (let i = 0; i < 3; i++) {
       const parent = contextRoot.parent();
-      if (parent && parent.kind() !== "source_file" && parent.kind() !== "program") {
+      if (
+        parent &&
+        parent.kind() !== "source_file" &&
+        parent.kind() !== "program"
+      ) {
         contextRoot = parent;
       } else {
         break;
@@ -179,9 +165,139 @@ ${treeView}`;
   }
 }
 
+async function handleCallNearestExpression(
+  source: string,
+  language: SupportedLanguage,
+  nodeInfo: NodeInfo | null,
+): Promise<ModResult> {
+  const targetNode = await findNodeUnderCursor(source, language, nodeInfo);
+
+  // Walk up the tree to find the nearest member_expression
+  let currentNode = targetNode;
+  let memberExpression = null;
+
+  while (currentNode) {
+    if (
+      currentNode.kind() === "member_expression" ||
+      currentNode.kind() === "call_expression"
+    ) {
+      memberExpression = currentNode;
+      break;
+    }
+    currentNode = currentNode.parent();
+  }
+
+  if (!memberExpression) {
+    throw new NoMatchError("member expression");
+  }
+
+  // Find the root of the member expression chain
+  let chainRoot = memberExpression;
+  while (chainRoot.parent()) {
+    const parent = chainRoot.parent();
+    if (
+      parent.kind() === "member_expression" ||
+      parent.kind() === "call_expression"
+    ) {
+      chainRoot = parent;
+    } else {
+      break;
+    }
+  }
+
+  const originalText = chainRoot.text();
+  const range = chainRoot.range();
+  const newText = `() => ${originalText}()`;
+
+  return {
+    mod: newText,
+    original_source: source,
+    original_range: range,
+  };
+}
+
+async function handleDeleteClosestTag(
+  source: string,
+  language: SupportedLanguage,
+  nodeInfo: NodeInfo | null,
+): Promise<ModResult> {
+  const targetNode = await findNodeUnderCursor(source, language, nodeInfo);
+
+  // First check if we're directly in a jsx_self_closing_element
+  let currentNode = targetNode;
+  while (currentNode) {
+    if (currentNode.kind() === "jsx_self_closing_element") {
+      // Delete the self-closing element entirely
+      return {
+        mod: "",
+        original_source: source,
+        original_range: currentNode.range(),
+        clipboard: currentNode.text(),
+      };
+    }
+    currentNode = currentNode.parent();
+  }
+
+  // Check if we're directly on opening/closing tags - delete the entire jsx_element
+  if (
+    targetNode.kind() === "jsx_opening_element" ||
+    targetNode.kind() === "jsx_closing_element"
+  ) {
+    const jsxElement = targetNode.parent();
+    if (jsxElement && jsxElement.kind() === "jsx_element") {
+      return {
+        mod: "",
+        original_source: source,
+        original_range: jsxElement.range(),
+        clipboard: jsxElement.text(),
+      };
+    }
+  }
+
+  // Walk up to find jsx_element and delete it entirely
+  currentNode = targetNode.parent();
+  while (currentNode) {
+    if (currentNode.kind() === "jsx_element") {
+      return {
+        mod: "",
+        original_source: source,
+        original_range: currentNode.range(),
+        clipboard: currentNode.text(),
+      };
+    }
+    // Stop if we hit another JSX boundary
+    if (
+      currentNode.kind() === "jsx_opening_element" ||
+      currentNode.kind() === "jsx_closing_element" ||
+      currentNode.kind() === "jsx_self_closing_element" ||
+      currentNode.kind() === "jsx_fragment"
+    ) {
+      break;
+    }
+    currentNode = currentNode.parent();
+  }
+
+  // Check for jsx_fragment and delete it entirely
+  currentNode = targetNode;
+  while (currentNode) {
+    if (currentNode.kind() === "jsx_fragment") {
+      return {
+        mod: "",
+        original_source: source,
+        original_range: currentNode.range(),
+        clipboard: currentNode.text(),
+      };
+    }
+    currentNode = currentNode.parent();
+  }
+
+  throw new NoMatchError("JSX tag or fragment");
+}
 
 const modMap = {
   debug_node_under_cursor: handleDebugNodeUnderCursor,
+  call_nearest_expression: handleCallNearestExpression,
+  delete_closest_tag: handleDeleteClosestTag,
 } as const;
 
 function handleListMods(): ListModsResult {
