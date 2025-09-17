@@ -25,8 +25,8 @@ end
 local restart_pending = false
 
 function M.cleanup_old_servers()
-  -- Kill any existing node processes running mod-flow server
-  local handle = io.popen("pgrep -f 'node.*index.ts' 2>/dev/null")
+  -- Kill any existing deno processes running mod-flow server
+  local handle = io.popen("pgrep -f 'deno.*index.ts' 2>/dev/null")
   if handle then
     local pids = handle:read("*a")
     handle:close()
@@ -55,7 +55,7 @@ function M.start_server()
     -- Clear the log file on startup
     vim.fn.writefile({}, env.NVIM_NODE_LOG_FILE)
 
-    server_job_id = vim.fn.jobstart({ "bun", "index.ts" }, {
+    server_job_id = vim.fn.jobstart({ "deno", "run", "--allow-all", "index.ts" }, {
       cwd = server_path,
       rpc = true,
       env = env,

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "lib": ["es2022", "dom", "deno.ns"],
+    "types": ["node"]
+  },
+  "nodeModulesDir": "none",
+  "imports": {
+    "@ast-grep/napi": "npm:@ast-grep/napi@^0.39.4",
+    "neovim": "npm:neovim@^5.4.0"
+  },
+  "fmt": {
+    "indentWidth": 2,
+    "lineWidth": 80,
+    "proseWrap": "preserve"
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  }
+}

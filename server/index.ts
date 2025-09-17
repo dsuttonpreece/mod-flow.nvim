@@ -1,4 +1,5 @@
-import { kind, parseAsync, type SgNode } from "@ast-grep/napi";
+import process from "node:process";
+import { parseAsync, type SgNode } from "@ast-grep/napi";
 import { attach } from "neovim";
 import {
   type Cursor,
@@ -59,148 +60,128 @@ type ListModsResult = {
   mods: string[];
 };
 
+function printNodeTree(node: SgNode, depth: number = 0, maxDepth: number = 3, targetNode?: SgNode, fieldName?: string): string {
+  if (depth > maxDepth) {
+    return "";
+  }
+
+  const indent = "  ".repeat(depth);
+  const isTarget = targetNode &&
+    node.range().start.line === targetNode.range().start.line &&
+    node.range().start.column === targetNode.range().start.column &&
+    node.range().end.line === targetNode.range().end.line &&
+    node.range().end.column === targetNode.range().end.column;
+
+  const nodeKind = isTarget ? `<<<${node.kind()}>>>` : node.kind();
+  const fieldPrefix = fieldName ? `${fieldName}: ` : "";
+  let result = `${indent}${fieldPrefix}${nodeKind}`;
+
+  // Check if this node is punctuation or comma-like that should join on same line
+  if (node.kind() === "," || node.kind() === ";" || node.kind() === "{" || node.kind() === "}" || node.kind() === "(" || node.kind() === ")") {
+    // For punctuation, don't add newline until after we process children
+  } else {
+    result += "\n";
+  }
+
+  // Simple field name detection based on common patterns
+  const children = node.children();
+  for (const child of children) {
+    if (depth < maxDepth) {
+      let childFieldName: string | undefined;
+      const childKind = child.kind();
+
+      // Basic field mappings for common cases
+      if (node.kind() === "class_declaration" && childKind === "type_identifier") {
+        childFieldName = "name";
+      } else if (node.kind() === "class_declaration" && childKind === "class_body") {
+        childFieldName = "body";
+      } else if (node.kind() === "extends_clause" && (childKind === "identifier" || childKind === "type_identifier")) {
+        childFieldName = "value";
+      } else if ((node.kind() === "method_definition" || node.kind() === "function_declaration") && (childKind === "property_identifier" || childKind === "identifier")) {
+        childFieldName = "name";
+      } else if ((node.kind() === "method_definition" || node.kind() === "function_declaration") && childKind === "formal_parameters") {
+        childFieldName = "parameters";
+      } else if ((node.kind() === "method_definition" || node.kind() === "function_declaration") && childKind === "statement_block") {
+        childFieldName = "body";
+      }
+
+      const childResult = printNodeTree(child, depth + 1, maxDepth, targetNode, childFieldName);
+
+      // If current node is punctuation and child is not empty, append on same line
+      if ((node.kind() === "," || node.kind() === ";" || node.kind() === "{" || node.kind() === "}" || node.kind() === "(" || node.kind() === ")") && childResult.trim()) {
+        result += " " + childResult.trim();
+      } else {
+        result += childResult;
+      }
+    }
+  }
+
+  // Add final newline for punctuation nodes
+  if (node.kind() === "," || node.kind() === ";" || node.kind() === "{" || node.kind() === "}" || node.kind() === "(" || node.kind() === ")") {
+    result += "\n";
+  }
+
+  return result;
+}
+
 async function handleDebugNodeUnderCursor(
   source: string,
   language: SupportedLanguage,
   nodeInfo: NodeInfo | null,
 ): Promise<ModResult> {
   if (!nodeInfo) {
-    throw new DebugError("No tree-sitter node info received");
+    throw new NoMatchError("tree-sitter node");
   }
 
   const ast = await parseAsync(getAstGrepLang(language), source);
   const root = ast.root();
 
-  // Find all nodes to search through
-  const allNodes = root.findAll();
+  // Use range constraint directly in the query for better performance
+  const matchingNodes = root.findAll({
+    rule: {
+      pattern: "$$$", // Match any node
+      range: {
+        start: {
+          line: nodeInfo.range.start.line,
+          column: nodeInfo.range.start.column,
+        },
+        end: {
+          line: nodeInfo.range.end.line,
+          column: nodeInfo.range.end.column,
+        },
+      },
+    },
+  });
 
-  // Find the matching ast-grep node using exact range matching
-  let matchingAstGrepNode: SgNode | undefined;
+  // Should find exactly one node with this exact range
+  const targetNode = matchingNodes[0];
 
-  for (const node of allNodes) {
-    const range = node.range();
-
-    // Match by exact range coordinates
-    if (
-      range.start.line === nodeInfo.range.start.line &&
-      range.start.column === nodeInfo.range.start.column &&
-      range.end.line === nodeInfo.range.end.line &&
-      range.end.column === nodeInfo.range.end.column
-    ) {
-      matchingAstGrepNode = node;
-      break;
-    }
-  }
-
-  let debugInfo = `Tree-sitter Node:
-  Type: ${nodeInfo.type}
-  Range: (${nodeInfo.range.start.line},${nodeInfo.range.start.column}) -> (${nodeInfo.range.end.line},${nodeInfo.range.end.column})
-  Text: "${nodeInfo.text}"
-
-AST-grep Node:`;
-
-  if (matchingAstGrepNode) {
-    const astRange = matchingAstGrepNode.range();
-    debugInfo += `
-  Kind: ${matchingAstGrepNode.kind()}
-  Range: (${astRange.start.line},${astRange.start.column}) -> (${astRange.end.line},${astRange.end.column})
-  Text: "${matchingAstGrepNode.text()}"
-
-  ✅ EXACT RANGE MATCH FOUND`;
-  } else {
-    debugInfo += `
-  ❌ NO EXACT RANGE MATCH FOUND
-
-  Searching for similar nodes...`;
-
-    // Find nodes with same text but different range
-    const sameTextNodes = allNodes.filter(node => node.text() === nodeInfo.text);
-    if (sameTextNodes.length > 0) {
-      debugInfo += `\n\n  Nodes with same text but different ranges:`;
-      for (const node of sameTextNodes.slice(0, 3)) { // Show max 3
-        const range = node.range();
-        debugInfo += `\n    Kind: ${node.kind()}, Range: (${range.start.line},${range.start.column}) -> (${range.end.line},${range.end.column})`;
-      }
-    }
-
-    // Find nodes with overlapping ranges
-    const overlappingNodes = allNodes.filter(node => {
-      const range = node.range();
-      return (
-        range.start.line <= nodeInfo.range.end.line &&
-        range.end.line >= nodeInfo.range.start.line &&
-        !(range.start.line === nodeInfo.range.start.line && range.start.column === nodeInfo.range.start.column &&
-          range.end.line === nodeInfo.range.end.line && range.end.column === nodeInfo.range.end.column)
-      );
-    });
-
-    if (overlappingNodes.length > 0) {
-      debugInfo += `\n\n  Nodes with overlapping ranges:`;
-      for (const node of overlappingNodes.slice(0, 3)) { // Show max 3
-        const range = node.range();
-        debugInfo += `\n    Kind: ${node.kind()}, Range: (${range.start.line},${range.start.column}) -> (${range.end.line},${range.end.column}), Text: "${node.text().slice(0, 30)}${node.text().length > 30 ? '...' : ''}"`;
-      }
-    }
-  }
-
-  throw new DebugError(debugInfo);
-}
-
-async function handleDeleteFunction(
-  source: string,
-  language: SupportedLanguage,
-  nodeInfo: NodeInfo | null,
-): Promise<ModResult> {
-  const ast = await parseAsync(getAstGrepLang(language), source);
-  const root = ast.root();
-  const lang = getAstGrepLang(language);
-
-  let targetFunction: SgNode | undefined;
-
-  if (nodeInfo) {
-    // Find the node using range and text constraints
-    const functionDeclarations = root.findAll(
-      kind(lang, "function_declaration"),
-    );
-
-    for (const func of functionDeclarations) {
-      const range = func.range();
-      const funcText = func.text();
-
-      // Match by range and text content
-      if (
-        range.start.line === nodeInfo.range.start.line &&
-        range.start.column === nodeInfo.range.start.column &&
-        range.end.line === nodeInfo.range.end.line &&
-        range.end.column === nodeInfo.range.end.column &&
-        funcText === nodeInfo.text
-      ) {
-        targetFunction = func;
+  if (targetNode) {
+    // Walk up 3 parent levels to find the root for our tree
+    let contextRoot = targetNode;
+    for (let i = 0; i < 3; i++) {
+      const parent = contextRoot.parent();
+      if (parent && parent.kind() !== "source_file" && parent.kind() !== "program") {
+        contextRoot = parent;
+      } else {
         break;
       }
     }
-  }
 
-  if (targetFunction) {
-    const range = targetFunction.range();
+    const treeView = printNodeTree(contextRoot, 0, 3, targetNode);
+    const debugInfo = `✅ AST Context (3 levels up, 3 levels down):
 
-    return {
-      mod: "", // Delete means empty replacement
-      original_range: {
-        start: { line: range.start.line, column: range.start.column },
-        end: { line: range.end.line, column: range.end.column },
-      },
-      original_source: source,
-      source: source.replace(targetFunction.text(), ""),
-    };
+${treeView}`;
+
+    throw new DebugError(debugInfo);
   } else {
-    throw new NoMatchError("function");
+    throw new NoMatchError("AST-grep node");
   }
 }
 
+
 const modMap = {
   debug_node_under_cursor: handleDebugNodeUnderCursor,
-  delete_function: handleDeleteFunction,
 } as const;
 
 function handleListMods(): ListModsResult {
