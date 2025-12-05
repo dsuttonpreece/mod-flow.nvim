@@ -223,71 +223,34 @@ async function handleDeleteClosestTag(
 ): Promise<ModResult> {
   const targetNode = await findNodeUnderCursor(source, language, nodeInfo);
 
-  // First check if we're directly in a jsx_self_closing_element
+  // Walk up from the target node to find the nearest JSX construct
   let currentNode = targetNode;
-  while (currentNode) {
-    if (currentNode.kind() === "jsx_self_closing_element") {
-      // Delete the self-closing element entirely
-      return {
-        mod: "",
-        original_source: source,
-        original_range: currentNode.range(),
-        clipboard: currentNode.text(),
-      };
-    }
-    currentNode = currentNode.parent();
-  }
+  let foundJsxBoundary = false;
 
-  // Check if we're directly on opening/closing tags - delete the entire jsx_element
-  if (
-    targetNode.kind() === "jsx_opening_element" ||
-    targetNode.kind() === "jsx_closing_element"
-  ) {
-    const jsxElement = targetNode.parent();
-    if (jsxElement && jsxElement.kind() === "jsx_element") {
-      return {
-        mod: "",
-        original_source: source,
-        original_range: jsxElement.range(),
-        clipboard: jsxElement.text(),
-      };
-    }
-  }
-
-  // Walk up to find jsx_element and delete it entirely
-  currentNode = targetNode.parent();
   while (currentNode) {
-    if (currentNode.kind() === "jsx_element") {
-      return {
-        mod: "",
-        original_source: source,
-        original_range: currentNode.range(),
-        clipboard: currentNode.text(),
-      };
-    }
-    // Stop if we hit another JSX boundary
+    const kind = currentNode.kind();
+
+    // Found a JSX construct - delete it (but only the first one we encounter)
     if (
-      currentNode.kind() === "jsx_opening_element" ||
-      currentNode.kind() === "jsx_closing_element" ||
-      currentNode.kind() === "jsx_self_closing_element" ||
-      currentNode.kind() === "jsx_fragment"
+      kind === "jsx_element" ||
+      kind === "jsx_self_closing_element" ||
+      kind === "jsx_fragment"
     ) {
-      break;
+      if (!foundJsxBoundary) {
+        // This is the deepest JSX construct we're inside
+        foundJsxBoundary = true;
+        return {
+          mod: "",
+          original_source: source,
+          original_range: currentNode.range(),
+          clipboard: currentNode.text(),
+        };
+      } else {
+        // We've already found our target JSX construct, don't cross this boundary
+        break;
+      }
     }
-    currentNode = currentNode.parent();
-  }
 
-  // Check for jsx_fragment and delete it entirely
-  currentNode = targetNode;
-  while (currentNode) {
-    if (currentNode.kind() === "jsx_fragment") {
-      return {
-        mod: "",
-        original_source: source,
-        original_range: currentNode.range(),
-        clipboard: currentNode.text(),
-      };
-    }
     currentNode = currentNode.parent();
   }
 
