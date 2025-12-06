@@ -1,10 +1,20 @@
-import { Lang, type SgNode } from "@ast-grep/napi";
+import { Lang, parseAsync, type SgNode } from "@ast-grep/napi";
 
 export type SupportedLanguage =
   | "javascript"
   | "typescript"
   | "typescriptreact"
   | "javascriptreact";
+
+export type NodeInfo = {
+  range: {
+    start: { line: number; column: number };
+    end: { line: number; column: number };
+  };
+  text: string;
+  type: string;
+  cursor: { line: number; column: number };
+};
 
 export function getAstGrepLang(language: SupportedLanguage): Lang {
   switch (language) {
@@ -20,37 +30,49 @@ export function getAstGrepLang(language: SupportedLanguage): Lang {
   }
 }
 
-export type Cursor = {
-  line: number;
-  column: number;
-};
-
-export function findClosestNodeAtCursor(matches: SgNode[], cursor: Cursor) {
-  let closestNode: SgNode | undefined;
-  let smallestRange = Infinity;
-
-  for (const match of matches) {
-    const range = match.range();
-    const start = range.start;
-    const end = range.end;
-
-    const withinLineRange =
-      cursor.line >= start.line && cursor.line <= end.line;
-    const withinStartCol =
-      cursor.line > start.line || cursor.column >= start.column;
-    const withinEndCol = cursor.line < end.line || cursor.column <= end.column;
-
-    if (withinLineRange && withinStartCol && withinEndCol) {
-      const rangeSize =
-        (end.line - start.line) * 1000 + (end.column - start.column);
-
-      if (rangeSize < smallestRange) {
-        smallestRange = rangeSize;
-        closestNode = match;
-      }
-    }
+// Find the smallest/deepest node that contains the cursor position
+export async function findNodeUnderCursor(
+  source: string,
+  language: SupportedLanguage,
+  nodeInfo: NodeInfo | null,
+): Promise<SgNode> {
+  if (!nodeInfo?.cursor) {
+    throw new Error("No cursor position");
   }
 
-  return closestNode;
-}
+  const ast = await parseAsync(getAstGrepLang(language), source);
+  const root = ast.root();
 
+  const { line, column } = nodeInfo.cursor;
+
+  function findDeepest(node: SgNode): SgNode | null {
+    const range = node.range();
+
+    const afterStart =
+      range.start.line < line ||
+      (range.start.line === line && range.start.column <= column);
+    const beforeEnd =
+      range.end.line > line ||
+      (range.end.line === line && range.end.column >= column);
+
+    if (!afterStart || !beforeEnd) {
+      return null;
+    }
+
+    for (const child of node.children()) {
+      const deeper = findDeepest(child);
+      if (deeper) {
+        return deeper;
+      }
+    }
+
+    return node;
+  }
+
+  const result = findDeepest(root);
+  if (!result) {
+    throw new Error("No node found at cursor");
+  }
+
+  return result;
+}
