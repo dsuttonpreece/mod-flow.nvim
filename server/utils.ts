@@ -1,21 +1,5 @@
 import { Lang, parseAsync, type SgNode } from "@ast-grep/napi";
 
-export type SupportedLanguage =
-  | "javascript"
-  | "typescript"
-  | "typescriptreact"
-  | "javascriptreact";
-
-export type NodeInfo = {
-  range: {
-    start: { line: number; column: number };
-    end: { line: number; column: number };
-  };
-  text: string;
-  type: string;
-  cursor: { line: number; column: number };
-};
-
 export function getAstGrepLang(language: SupportedLanguage): Lang {
   switch (language) {
     case "javascript":
@@ -34,12 +18,8 @@ export function getAstGrepLang(language: SupportedLanguage): Lang {
 export async function findNodeUnderCursor(
   source: string,
   language: SupportedLanguage,
-  nodeInfo: NodeInfo | null,
+  nodeInfo: NodeInfo,
 ): Promise<SgNode> {
-  if (!nodeInfo?.cursor) {
-    throw new Error("No cursor position");
-  }
-
   const ast = await parseAsync(getAstGrepLang(language), source);
   const root = ast.root();
 
@@ -76,3 +56,43 @@ export async function findNodeUnderCursor(
 
   return result;
 }
+
+// Find the closest ancestor matching any of the given kinds
+export function findAncestorOfKind(node: SgNode, kinds: string[]): SgNode | null {
+  let current: SgNode | null = node;
+  while (current) {
+    if (kinds.includes(current.kind() as string)) {
+      return current;
+    }
+    current = current.parent();
+  }
+  return null;
+}
+
+const LIST_PARENT_KINDS = ["arguments", "formal_parameters", "binary_expression", "ternary_expression"];
+
+export async function findListParentAtCursor(
+  source: string,
+  language: SupportedLanguage,
+  nodeInfo: NodeInfo,
+): Promise<SgNode | null> {
+  const node = await findNodeUnderCursor(source, language, nodeInfo);
+  return findAncestorOfKind(node, LIST_PARENT_KINDS);
+}
+
+export type SupportedLanguage =
+  | "javascript"
+  | "typescript"
+  | "typescriptreact"
+  | "javascriptreact";
+
+export type NodeInfo = {
+  range: {
+    start: { line: number; column: number };
+    end: { line: number; column: number };
+  };
+  text: string;
+  type: string;
+  cursor: { line: number; column: number };
+};
+
