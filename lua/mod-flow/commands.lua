@@ -2,20 +2,6 @@ local M = {}
 local server = require("mod-flow.server")
 local utils = require("mod-flow.utils")
 
-function M.select_method()
-  if not server.is_running() then
-    return
-  end
-
-  local node_info, cursor_pos = utils.get_node_info_under_cursor()
-
-  server.async_request("list_mods", { node_info = node_info }, function(result)
-    vim.schedule(function()
-      M.handle_result(result, "list_mods", node_info, cursor_pos)
-    end)
-  end)
-end
-
 local function handle_result(result, method_name, cached_node_info, cursor_pos)
   if method_name == "list_mods" then
     vim.ui.select(result.mods, {
@@ -64,12 +50,31 @@ local function handle_result(result, method_name, cached_node_info, cursor_pos)
       result.original_range["end"].column,
       replacement_lines
     )
+
+    -- Move cursor to new position if specified (cursor is 0-indexed, nvim expects 1-indexed row)
+    if result.cursor then
+      vim.api.nvim_win_set_cursor(0, { result.cursor.line + 1, result.cursor.column })
+    end
   else
     print("Unknown error occurred")
     if cursor_pos then
       vim.api.nvim_win_set_cursor(0, cursor_pos)
     end
   end
+end
+
+function M.select_method()
+  if not server.is_running() then
+    return
+  end
+
+  local node_info, cursor_pos = utils.get_node_info_under_cursor()
+
+  server.async_request("list_mods", { node_info = node_info }, function(result)
+    vim.schedule(function()
+      handle_result(result, "list_mods", node_info, cursor_pos)
+    end)
+  end)
 end
 
 return M
