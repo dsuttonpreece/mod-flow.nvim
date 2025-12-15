@@ -33,7 +33,7 @@ export async function findNodeUnderCursor(
       (range.start.line === line && range.start.column <= column);
     const beforeEnd =
       range.end.line > line ||
-      (range.end.line === line && range.end.column >= column);
+      (range.end.line === line && range.end.column > column);
 
     if (!afterStart || !beforeEnd) {
       return null;
@@ -69,7 +69,7 @@ export function findAncestorOfKind(node: SgNode, kinds: string[]): SgNode | null
   return null;
 }
 
-const LIST_PARENT_KINDS = ["arguments", "formal_parameters", "binary_expression", "ternary_expression"];
+const LIST_PARENT_KINDS = ["arguments", "formal_parameters", "binary_expression", "ternary_expression", "object_pattern", "intersection_type", "union_type"];
 
 export async function findListParentAtCursor(
   source: string,

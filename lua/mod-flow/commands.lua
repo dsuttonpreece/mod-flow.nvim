@@ -77,4 +77,32 @@ function M.select_method()
   end)
 end
 
+function M.move_left()
+  if not server.is_running() then
+    return
+  end
+
+  local node_info, cursor_pos = utils.get_node_info_under_cursor()
+
+  server.async_request("move_left", { node_info = node_info }, function(result)
+    vim.schedule(function()
+      handle_result(result, "move_left", node_info, cursor_pos)
+    end)
+  end)
+end
+
+function M.move_right()
+  if not server.is_running() then
+    return
+  end
+
+  local node_info, cursor_pos = utils.get_node_info_under_cursor()
+
+  server.async_request("move_right", { node_info = node_info }, function(result)
+    vim.schedule(function()
+      handle_result(result, "move_right", node_info, cursor_pos)
+    end)
+  end)
+end
+
 return M

@@ -23,7 +23,7 @@ function cursorContains(
     (range.start.line === line && range.start.column <= column);
   const beforeEnd =
     range.end.line > line ||
-    (range.end.line === line && range.end.column >= column);
+    (range.end.line === line && range.end.column > column);
   return afterStart && beforeEnd;
 }
 
@@ -64,8 +64,8 @@ async function handleMoveNode(
   const { line, column } = nodeInfo.cursor;
   const parentKind = listParent.kind() as string;
 
-  // Handle binary expressions specially
-  if (parentKind === "binary_expression") {
+  // Handle binary-like kinds
+  if (parentKind === "binary_expression" || parentKind === "intersection_type" || parentKind === "union_type") {
     const children = listParent.children();
     // binary_expression has: left, operator, right
     const left = children[0];
@@ -321,10 +321,10 @@ async function handleMoveNode(
     };
   }
 
-  // Handle comma-separated lists (arguments, formal_parameters)
+  // Handle comma-separated lists (arguments, formal_parameters, object_pattern)
   const items = listParent.children().filter((child) => {
     const kind = child.kind();
-    return kind !== "," && kind !== "(" && kind !== ")";
+    return kind !== "," && kind !== "(" && kind !== ")" && kind !== "{" && kind !== "}";
   });
 
   const currentIndex = items.findIndex((item) =>

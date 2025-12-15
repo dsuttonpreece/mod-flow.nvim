@@ -9,6 +9,8 @@ function M.setup()
   server.start()
 
   vim.keymap.set("n", "<leader>m", commands.select_method, { desc = "ModFlow: Select Method" })
+  vim.keymap.set("n", "<leader><", commands.move_left, { desc = "ModFlow: Move Left" })
+  vim.keymap.set("n", "<leader>>", commands.move_right, { desc = "ModFlow: Move Right" })
 
   vim.api.nvim_create_user_command("ModRestart", function()
     server.start()
